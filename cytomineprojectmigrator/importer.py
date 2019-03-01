@@ -377,6 +377,8 @@ class Importer:
         for description_json in descriptions_json:
             desc = Description(obj).populate(json.load(open(os.path.join(self.working_path, description_json))))
             desc.domainIdent = self.id_mapping[desc.domainIdent]
+            desc._object.class_ = desc.domainClassName
+            desc._object.id = desc.domainIdent
             desc.save()
 
 
