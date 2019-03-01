@@ -127,10 +127,11 @@ class Importer:
         remote_ontology.name = remote_ontology.name.strip()
 
         terms = TermCollection().fetch()
-        terms_json = [f for f in os.listdir(self.working_path) if f.endswith(".json") and f.startswith("term-collection")][0]
+        terms_json = [f for f in os.listdir(self.working_path) if f.endswith(".json") and f.startswith("term-collection")]
         remote_terms = TermCollection()
-        for t in json.load(open(os.path.join(self.working_path, terms_json))):
-            remote_terms.append(Term().populate(t))
+        if len(terms_json) > 0:
+            for t in json.load(open(os.path.join(self.working_path, terms_json[0]))):
+                remote_terms.append(Term().populate(t))
 
         def ontology_exists():
             compatible_ontology = find_first([o for o in ontologies if o.name == remote_ontology.name.strip()])
@@ -232,10 +233,11 @@ class Importer:
         logging.info("3/ Import images")
         storages = StorageCollection().fetch()
         abstract_images = AbstractImageCollection().fetch()
-        images_json = [f for f in os.listdir(self.working_path) if f.endswith(".json") and f.startswith("imageinstance-collection")][0]
+        images_json = [f for f in os.listdir(self.working_path) if f.endswith(".json") and f.startswith("imageinstance-collection")]
         remote_images = ImageInstanceCollection()
-        for i in json.load(open(os.path.join(self.working_path, images_json))):
-            remote_images.append(ImageInstance().populate(i))
+        if len(images_json) > 0:
+            for i in json.load(open(os.path.join(self.working_path, images_json[0]))):
+                remote_images.append(ImageInstance().populate(i))
 
         remote_images_dict = {}
 
@@ -316,10 +318,11 @@ class Importer:
 
         # --------------------------------------------------------------------------------------------------------------
         logging.info("4/ Import user annotations")
-        annots_json = [f for f in os.listdir(self.working_path) if f.endswith(".json") and f.startswith("user-annotation-collection")][0]
+        annots_json = [f for f in os.listdir(self.working_path) if f.endswith(".json") and f.startswith("user-annotation-collection")]
         remote_annots = AnnotationCollection()
-        for a in json.load(open(os.path.join(self.working_path, annots_json))):
-            remote_annots.append(Annotation().populate(a))
+        if len(annots_json) > 0:
+            for a in json.load(open(os.path.join(self.working_path, annots_json[0]))):
+                remote_annots.append(Annotation().populate(a))
 
         def _add_annotation(remote_annotation, id_mapping, with_original_date):
             if remote_annotation.project not in id_mapping.keys() \
