@@ -24,12 +24,14 @@ import json
 import os
 import logging
 import random
+import shutil
 import string
 import sys
 import tarfile
 import time
 from argparse import ArgumentParser
 
+import requests
 from cytomine import Cytomine
 from cytomine.models import OntologyCollection, TermCollection, User, RelationTerm, ProjectCollection, \
     StorageCollection, AbstractImageCollection, ImageInstance, ImageInstanceCollection, AbstractImage, UserCollection, \
@@ -389,6 +391,14 @@ if __name__ == '__main__':
 
     with Cytomine(params.host, params.public_key, params.private_key) as _:
         options = {k:v for (k,v) in vars(params).items() if k.startswith('without')}
+
+        if params.project_path.startswith("http://") or params.project_path.startswith("https://"):
+            logging.info("Downloading from {}".format(params.project_path))
+            response = requests.get(params.project_path, allow_redirects=True, stream=True)
+            params.project_path = params.project_path[params.project_path.rfind("/") + 1 :]
+            with open(params.project_path, "wb") as f:
+                shutil.copyfileobj(response.raw, f)
+                logging.info("Downloaded successfully.")
 
         if params.project_path.endswith(".tar.gz"):
             tar = tarfile.open(params.project_path, "r:gz")
