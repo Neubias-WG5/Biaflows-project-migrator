@@ -268,6 +268,10 @@ if __name__ == '__main__':
     params, other = parser.parse_known_args(sys.argv[1:])
 
     with Cytomine(params.host, params.public_key, params.private_key) as _:
+        Cytomine.get_instance().open_admin_session()
         options = {k:v for (k,v) in vars(params).items() if k.startswith('without') or k == 'anonymize'}
         exporter = Exporter(params.working_path, params.id_project, **options)
         exporter.run()
+        if params.make_archive:
+            exporter.make_archive()
+        Cytomine.get_instance().close_admin_session()
