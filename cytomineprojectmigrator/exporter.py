@@ -21,6 +21,7 @@ from __future__ import unicode_literals
 
 import logging
 import os
+import shutil
 import sys
 from argparse import ArgumentParser
 from datetime import datetime
@@ -53,8 +54,9 @@ class Exporter:
             raise ValueError("Project not found")
 
         items = [Cytomine.get_instance().host, self.project.id, self.project.name, datetime.now()]
-        directory = "{}-{}-{}-{}".format(*[str(item).replace(" ", "-") for item in items])
-        self.working_path = os.path.join(working_path, directory)
+        self.project_directory = "{}-{}-{}-{}".format(*[str(item).replace(" ", "-") for item in items])
+        self.working_path = working_path
+        self.project_path = os.path.join(working_path, self.project_directory)
         self.attached_file_path = None
 
         self.with_image_download = not without_image_download
@@ -67,11 +69,11 @@ class Exporter:
         self.users = UserCollection()
 
     def run(self):
-        logging.info("Export will be done in directory {}".format(self.working_path))
-        os.makedirs(self.working_path)
+        logging.info("Export will be done in directory {}".format(self.project_path))
+        os.makedirs(self.project_path)
 
         if self.with_metadata or self.with_annotation_metadata:
-            self.attached_file_path = os.path.join(self.working_path, "attached_files")
+            self.attached_file_path = os.path.join(self.project_path, "attached_files")
             os.makedirs(self.attached_file_path)
 
         # --------------------------------------------------------------------------------------------------------------
@@ -120,7 +122,7 @@ class Exporter:
         self.save_object(images)
 
         if self.with_image_download:
-            image_path = os.path.join(self.working_path, "images")
+            image_path = os.path.join(self.project_path, "images")
             os.makedirs(image_path)
 
             def _download_image(image, path):
@@ -194,7 +196,7 @@ class Exporter:
                 self.export_metadata(image_groups)
 
             if self.with_image_download:
-                image_group_path = os.path.join(self.working_path, "imagegroups")
+                image_group_path = os.path.join(self.project_path, "imagegroups")
                 os.makedirs(image_group_path)
                 for image_group in image_groups:
                     image_group.download(os.path.join(image_group_path, image_group.name), override=False, parent=True)
@@ -244,9 +246,14 @@ class Exporter:
         elif isinstance(obj, Collection):
             filename = "{}-collection.json".format(obj.callback_identifier)
 
-        with open(os.path.join(self.working_path, filename), 'w') as outfile:
+        with open(os.path.join(self.project_path, filename), 'w') as outfile:
             outfile.write(obj.to_json())
             logging.info("Object {} has been saved locally.".format(obj))
+
+    def make_archive(self):
+        logging.info("Making archive...")
+        shutil.make_archive(self.project_path, "gztar", self.working_path, self.project_directory)
+        logging.info("Finished.")
 
 
 if __name__ == '__main__':
@@ -257,9 +264,10 @@ if __name__ == '__main__':
     parser.add_argument('--private_key', help="The Cytomine private key used to export the project. "
                                               "The underlying user has to be a manager of the exported project.")
     parser.add_argument('--id_project', help="The Cytomine identifier of the project to export.")
+    parser.add_argument('--make_archive', default=True, help="Make an archive for the exported project.")
     parser.add_argument('--working_path', default="", help="The base path where the generated archive will be stored.")
     parser.add_argument('--anonymize', default=False, help="Anonymize users in the project.")
-    parser.add_argument('--without_image_download', default=True, help="Do not download images but export image metadata.")
+    parser.add_argument('--without_image_download', default=False, help="Do not download images but export image metadata.")
     parser.add_argument('--without_image_groups', default=False, help="Do not export image groups.")
     parser.add_argument('--without_user_annotations', default=False, help="Do not export user annotations.")
     parser.add_argument('--without_metadata', default=False, help="Do not export any metadata.")
