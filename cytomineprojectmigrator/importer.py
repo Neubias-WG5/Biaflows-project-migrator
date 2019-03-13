@@ -35,7 +35,8 @@ import requests
 from cytomine import Cytomine
 from cytomine.models import OntologyCollection, TermCollection, User, RelationTerm, ProjectCollection, \
     StorageCollection, AbstractImageCollection, ImageInstance, ImageInstanceCollection, AbstractImage, UserCollection, \
-    Ontology, Project, Term, AnnotationCollection, Annotation, Property, Model,  AttachedFile, Description
+    Ontology, Project, Term, AnnotationCollection, Annotation, Property, Model, AttachedFile, Description, \
+    ImageGroupCollection, ImageGroup, ImageSequenceCollection, ImageSequence
 from joblib import Parallel, delayed
 
 __author__ = "Rubens Ulysse <urubens@uliege.be>"
@@ -233,88 +234,159 @@ class Importer:
         logging.info("3/ Import images")
         storages = StorageCollection().fetch()
         abstract_images = AbstractImageCollection().fetch()
-        images_json = [f for f in os.listdir(self.working_path) if f.endswith(".json") and f.startswith("imageinstance-collection")]
-        remote_images = ImageInstanceCollection()
-        if len(images_json) > 0:
-            for i in json.load(open(os.path.join(self.working_path, images_json[0]))):
-                remote_images.append(ImageInstance().populate(i))
 
-        remote_images_dict = {}
+        groups_json = [f for f in os.listdir(self.working_path) if f.endswith(".json")
+                       and f.startswith("imagegroup-collection")]
+        remote_groups = ImageGroupCollection()
+        if len(groups_json) > 0:
+            for i in json.load(open(os.path.join(self.working_path, groups_json[0]))):
+                remote_groups.append(ImageGroup().populate(i))
 
-        for remote_image in remote_images:
-            image = copy.copy(remote_image)
+        if len(remote_groups) > 0:
+            # Get image sequences.
+            sequences_json = [f for f in os.listdir(self.working_path) if f.endswith(".json")
+                           and f.startswith("imagesequence-collection")]
+            remote_sequences = ImageSequenceCollection()
+            if len(sequences_json) > 0:
+                for i in json.load(open(os.path.join(self.working_path, sequences_json[0]))):
+                    remote_sequences.append(ImageSequence().populate(i))
 
-            # Fix old image name due to urllib3 limitation
-            remote_image.originalFilename = bytes(remote_image.originalFilename, 'utf-8').decode('ascii', 'ignore')
-            if remote_image.originalFilename not in remote_images_dict.keys():
-                remote_images_dict[remote_image.originalFilename] = [remote_image]
-            else:
-                remote_images_dict[remote_image.originalFilename].append(remote_image)
-            logging.info("Importing image: {}".format(remote_image))
+            remote_groups_dict = {}
+            for remote_group in remote_groups:
+                group = copy.copy(remote_group)
 
-            # SWITCH user to image creator user
-            connect_as(User().fetch(self.id_mapping[remote_image.user]))
-            # Get its storage
-            storage = find_first([s for s in storages if s.user == Cytomine.get_instance().current_user.id])
-            if not storage:
-                storage = storages[0]
+                # Fix old image name due to urllib3 limitation
+                remote_group.name = bytes(remote_group.name, 'utf-8').decode('ascii', 'ignore')
+                if remote_group.name not in remote_groups_dict.keys():
+                    remote_groups_dict[remote_group.name] = [remote_group]
+                else:
+                    remote_groups_dict[remote_group.name].append(remote_group)
+                logging.info("Importing image (multidimensional): {}".format(remote_group))
 
-            # Check if image is already in its storage
-            abstract_image = find_first([ai for ai in abstract_images
-                                         if ai.originalFilename == remote_image.originalFilename
-                                         and ai.width == remote_image.width
-                                         and ai.height == remote_image.height
-                                         and ai.resolution == remote_image.resolution])
-            if abstract_image:
-                logging.info("== Found corresponding abstract image. Linking to project.")
-                ImageInstance(abstract_image.id, self.id_mapping[remote_project.id]).save()
-            else:
+                # Find uploader
+                first_seq = find_first([s for s in remote_sequences if s.imageGroup == remote_group.id])
+
+                # SWITCH user to image creator user
+                connect_as(User().fetch(self.id_mapping[first_seq.model['user']]))
+                # Get its storage
+                storage = find_first([s for s in storages if s.user == Cytomine.get_instance().current_user.id])
+                if not storage:
+                    storage = storages[0]
+
                 logging.info("== New image starting to upload & deploy")
-                filename = os.path.join(self.working_path, "images", image.originalFilename.replace("/", "-"))
+                filename = os.path.join(self.working_path, "imagegroups", group.name.replace("/", "-"))
                 Cytomine.get_instance().upload_image(self.host_upload, filename, storage.id,
                                                      self.id_mapping[remote_project.id])
                 time.sleep(0.8)
 
-            # SWITCH USER
-            connect_as(self.super_admin, True)
+                # SWITCH USER
+                connect_as(self.super_admin, True)
 
-        # Waiting for all images...
-        n_new_images = -1
-        new_images = None
-        count = 0
-        while n_new_images != len(remote_images) and count < len(remote_images) * 5:
-            new_images = ImageInstanceCollection().fetch_with_filter("project", self.id_mapping[remote_project.id])
-            n_new_images = len(new_images)
-            if count > 0:
-                time.sleep(5)
-            count = count + 1
-        print("All images have been deployed. Fixing image-instances...")
+            # Waiting for all images...
+            n_new_groups = -1
+            count = 0
+            new_groups = None
+            while n_new_groups != len(remote_groups) and count < len(remote_groups) * 5:
+                new_groups = ImageGroupCollection().fetch_with_filter("project", self.id_mapping[remote_project.id])
+                n_new_groups = len(new_groups)
+                if count > 0:
+                    time.sleep(5)
+                count = count + 1
+            print("All images have been deployed. Fixing groups ...")
 
-        # Fix image instances meta-data:
-        for new_image in new_images:
-            remote_image = remote_images_dict[new_image.originalFilename].pop()
-            if self.with_original_date:
-                new_image.created = remote_image.created
-                new_image.updated = remote_image.updated
-            new_image.reviewStart = remote_image.reviewStart if hasattr(remote_image, 'reviewStart') else None
-            new_image.reviewStop = remote_image.reviewStop if hasattr(remote_image, 'reviewStop') else None
-            new_image.reviewUser = self.id_mapping[remote_image.reviewUser] if hasattr(remote_image, 'reviewUser') and remote_image.reviewUser else None
-            new_image.instanceFilename = remote_image.instanceFilename
-            new_image.update()
-            self.id_mapping[remote_image.id] = new_image.id
-            self.id_mapping[remote_image.baseImage] = new_image.baseImage
+            for new_group in new_groups:
+                remote_group = remote_groups_dict[new_group.name].pop()
+                if self.with_original_date:
+                    new_group.created = remote_group.created
+                    new_group.updated = remote_group.updated
+                new_group.update()
+                self.id_mapping[remote_group.id] = new_group.id
 
-            new_abstract = AbstractImage().fetch(new_image.baseImage)
-            if self.with_original_date:
-                new_abstract.created = remote_image.created
-                new_abstract.updated = remote_image.updated
-            if new_abstract.resolution is None:
-                new_abstract.resolution = remote_image.resolution
-            if new_abstract.magnification is None:
-                new_abstract.magnification = remote_image.magnification
-            new_abstract.update()
+            print("All image groups have been fixed.")
+        else:
+            images_json = [f for f in os.listdir(self.working_path) if f.endswith(".json")
+                           and f.startswith("imageinstance-collection")]
+            remote_images = ImageInstanceCollection()
+            if len(images_json) > 0:
+                for i in json.load(open(os.path.join(self.working_path, images_json[0]))):
+                    remote_images.append(ImageInstance().populate(i))
 
-        print("All image-instances have been fixed.")
+            remote_images_dict = {}
+
+            for remote_image in remote_images:
+                image = copy.copy(remote_image)
+
+                # Fix old image name due to urllib3 limitation
+                remote_image.originalFilename = bytes(remote_image.originalFilename, 'utf-8').decode('ascii', 'ignore')
+                if remote_image.originalFilename not in remote_images_dict.keys():
+                    remote_images_dict[remote_image.originalFilename] = [remote_image]
+                else:
+                    remote_images_dict[remote_image.originalFilename].append(remote_image)
+                logging.info("Importing image: {}".format(remote_image))
+
+                # SWITCH user to image creator user
+                connect_as(User().fetch(self.id_mapping[remote_image.user]))
+                # Get its storage
+                storage = find_first([s for s in storages if s.user == Cytomine.get_instance().current_user.id])
+                if not storage:
+                    storage = storages[0]
+
+                # Check if image is already in its storage
+                abstract_image = find_first([ai for ai in abstract_images
+                                             if ai.originalFilename == remote_image.originalFilename
+                                             and ai.width == remote_image.width
+                                             and ai.height == remote_image.height
+                                             and ai.resolution == remote_image.resolution])
+                if abstract_image:
+                    logging.info("== Found corresponding abstract image. Linking to project.")
+                    ImageInstance(abstract_image.id, self.id_mapping[remote_project.id]).save()
+                else:
+                    logging.info("== New image starting to upload & deploy")
+                    filename = os.path.join(self.working_path, "images", image.originalFilename.replace("/", "-"))
+                    Cytomine.get_instance().upload_image(self.host_upload, filename, storage.id,
+                                                         self.id_mapping[remote_project.id])
+                    time.sleep(0.8)
+
+                # SWITCH USER
+                connect_as(self.super_admin, True)
+
+            # Waiting for all images...
+            n_new_images = -1
+            new_images = None
+            count = 0
+            while n_new_images != len(remote_images) and count < len(remote_images) * 5:
+                new_images = ImageInstanceCollection().fetch_with_filter("project", self.id_mapping[remote_project.id])
+                n_new_images = len(new_images)
+                if count > 0:
+                    time.sleep(5)
+                count = count + 1
+            print("All images have been deployed. Fixing image-instances...")
+
+            # Fix image instances meta-data:
+            for new_image in new_images:
+                remote_image = remote_images_dict[new_image.originalFilename].pop()
+                if self.with_original_date:
+                    new_image.created = remote_image.created
+                    new_image.updated = remote_image.updated
+                new_image.reviewStart = remote_image.reviewStart if hasattr(remote_image, 'reviewStart') else None
+                new_image.reviewStop = remote_image.reviewStop if hasattr(remote_image, 'reviewStop') else None
+                new_image.reviewUser = self.id_mapping[remote_image.reviewUser] if hasattr(remote_image, 'reviewUser') and remote_image.reviewUser else None
+                new_image.instanceFilename = remote_image.instanceFilename
+                new_image.update()
+                self.id_mapping[remote_image.id] = new_image.id
+                self.id_mapping[remote_image.baseImage] = new_image.baseImage
+
+                new_abstract = AbstractImage().fetch(new_image.baseImage)
+                if self.with_original_date:
+                    new_abstract.created = remote_image.created
+                    new_abstract.updated = remote_image.updated
+                if new_abstract.resolution is None:
+                    new_abstract.resolution = remote_image.resolution
+                if new_abstract.magnification is None:
+                    new_abstract.magnification = remote_image.magnification
+                new_abstract.update()
+
+            print("All image-instances have been fixed.")
 
         # --------------------------------------------------------------------------------------------------------------
         logging.info("4/ Import user annotations")
@@ -364,18 +436,24 @@ class Importer:
                 prop.domainIdent = self.id_mapping[prop.domainIdent]
                 prop.save()
 
+        attached_file_id_mapping = {}
         attached_files_json = [f for f in os.listdir(self.working_path) if
                        f.endswith(".json") and f.startswith("attached-files")]
         for attached_file_json in attached_files_json:
             for remote_af in json.load(open(os.path.join(self.working_path, attached_file_json))):
                 af = AttachedFile(obj).populate(remote_af)
                 af.domainIdent = self.id_mapping[af.domainIdent]
-                af.filename = os.path.join(self.working_path, "attached_files", remote_af.filename)
-                af.save()
+                af.filename = os.path.join(self.working_path, "attached_files", af.filename)
+                af_id = af.id
+                af.id = None
+                new_af = af.save()
+                attached_file_id_mapping[af_id] = new_af.id
 
         descriptions_json = [f for f in os.listdir(self.working_path) if f.endswith(".json") and f.startswith("description")]
         for description_json in descriptions_json:
             desc = Description(obj).populate(json.load(open(os.path.join(self.working_path, description_json))))
+            for (id, new_id) in attached_file_id_mapping.items():
+                desc.data = desc.data.replace("attachedfile/{}".format(id), "attachedfile/{}".format(new_id))
             desc.domainIdent = self.id_mapping[desc.domainIdent]
             desc._object.class_ = desc.domainClassName
             desc._object.id = desc.domainIdent
@@ -394,7 +472,7 @@ if __name__ == '__main__':
     # TODO: other options
     params, other = parser.parse_known_args(sys.argv[1:])
 
-    with Cytomine(params.host, params.public_key, params.private_key) as _:
+    with Cytomine(params.host, params.public_key, params.private_key, verbose=logging.DEBUG) as _:
         options = {k:v for (k,v) in vars(params).items() if k.startswith('without')}
 
         if params.project_path.startswith("http://") or params.project_path.startswith("https://"):
