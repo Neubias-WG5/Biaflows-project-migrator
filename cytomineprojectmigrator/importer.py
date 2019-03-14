@@ -472,7 +472,7 @@ if __name__ == '__main__':
     # TODO: other options
     params, other = parser.parse_known_args(sys.argv[1:])
 
-    with Cytomine(params.host, params.public_key, params.private_key, verbose=logging.DEBUG) as _:
+    with Cytomine(params.host, params.public_key, params.private_key) as _:
         options = {k:v for (k,v) in vars(params).items() if k.startswith('without')}
 
         if params.project_path.startswith("http://") or params.project_path.startswith("https://"):
