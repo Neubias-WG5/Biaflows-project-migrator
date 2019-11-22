@@ -12,7 +12,7 @@
 # * See the License for the specific language governing permissions and
 # * limitations under the License.
 
-FROM cytomineuliege/software-python3-base:v2.2.0-py3.6.8
+FROM cytomineuliege/software-python3-base:v2.4.0-py3.6.8
 
 RUN apt-get update && apt-get install -y net-tools
 

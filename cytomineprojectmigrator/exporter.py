@@ -29,7 +29,8 @@ from datetime import datetime
 from cytomine import Cytomine
 from cytomine.models import Project, Model, Collection, Ontology, TermCollection, ImageInstanceCollection, \
     AnnotationCollection, UserCollection, User, PropertyCollection, \
-    AttachedFileCollection, Description, ImageGroupCollection, ImageSequenceCollection
+    AttachedFileCollection, Description
+from cytomine.models.image import SliceInstanceCollection
 from joblib import Parallel, delayed
 
 
@@ -117,34 +118,11 @@ class Exporter:
             self.export_metadata(terms)
 
         # --------------------------------------------------------------------------------------------------------------
-        image_groups = ImageGroupCollection()
-        if self.with_image_groups:
-            logging.info("4/ Export image groups")
-            image_groups = ImageGroupCollection().fetch_with_filter("project", self.project.id)
-            self.save_object(image_groups)
-
-            if self.with_metadata:
-                logging.info("4.1/ Export image group metadata")
-                self.export_metadata(image_groups)
-
-            if self.with_image_download:
-                image_group_path = os.path.join(self.project_path, "imagegroups")
-                os.makedirs(image_group_path)
-                for image_group in image_groups:
-                    image_group.download(os.path.join(image_group_path, image_group.name), override=False,
-                                         parent=True)
-
-            image_sequences = ImageSequenceCollection()
-            for image_group in image_groups:
-                image_sequences += ImageSequenceCollection().fetch_with_filter("imagegroup", image_group.id)
-            self.save_object(image_sequences)
-
-        # --------------------------------------------------------------------------------------------------------------
         logging.info("4/ Export images")
         images = ImageInstanceCollection().fetch_with_filter("project", self.project.id)
         self.save_object(images)
 
-        if self.with_image_download and len(image_groups) == 0:
+        if self.with_image_download:
             image_path = os.path.join(self.project_path, "images")
             os.makedirs(image_path)
 
@@ -155,20 +133,26 @@ class Exporter:
             # Temporary use threading as backend, as we need to connect to Cytomine in every other processes.
             Parallel(n_jobs=-1, backend="threading")(delayed(_download_image)(image, image_path) for image in images)
 
-        logging.info("4.1/ Export image creator users")
+        logging.info("4.1/ Export image slices")
+        slices = SliceInstanceCollection()
+        for image in images:
+            slices += SliceInstanceCollection().fetch_with_filter("imageinstance", image.id)
+        self.save_object(slices)
+
+        logging.info("4.2/ Export image creator users")
         image_users = set([image.user for image in images])
         for image_user in image_users:
             user = User().fetch(image_user)
             self.save_user(user, "image_creator")
 
-        logging.info("4.2/ Export image reviewer users")
+        logging.info("4.3/ Export image reviewer users")
         image_users = set([image.reviewUser for image in images if image.reviewUser])
         for image_user in image_users:
             user = User().fetch(image_user)
             self.save_user(user, "image_reviewer")
 
-        if self.with_metadata and len(image_groups) == 0:
-            logging.info("4.3/ Export image metadata")
+        if self.with_metadata:
+            logging.info("4.4/ Export image metadata")
             self.export_metadata(images)
 
         # --------------------------------------------------------------------------------------------------------------
@@ -183,7 +167,7 @@ class Exporter:
             self.save_user(user, "userannotation_creator")
 
         logging.info("4.2/ Export user annotation term creator users")
-        annotation_users = set([annotation.userTerm for annotation in user_annotations if annotation.userTerm])
+        annotation_users = set([annotation.userTerm for annotation in user_annotations if hasattr(annotation, "userTerm") and annotation.userTerm])
         for annotation_user in annotation_users:
             user = User().fetch(annotation_user)
             self.save_user(user, "userannotationterm_creator")
@@ -208,8 +192,6 @@ class Exporter:
         #     logging.info("5.1/ Export user metadata")
         #     self.export_metadata(self.users)
 
-
-
         # --------------------------------------------------------------------------------------------------------------
         logging.info("Finished.")
 
@@ -228,6 +210,12 @@ class Exporter:
             description = Description(obj).fetch()
             if description:
                 save_object_fn(description, "description-object-{}".format(obj.id))
+
+                attached_files = AttachedFileCollection(description).fetch()
+                if len(attached_files) > 0:
+                    save_object_fn(attached_files, "attached-files-object-{}-collection".format(obj.id))
+                    for attached_file in attached_files:
+                        attached_file.download(os.path.join(attached_file_path, "{filename}"), True)
 
         Parallel(n_jobs=-1, backend="threading")(delayed(_export_metadata)(self.save_object, obj, self.attached_file_path)
                                                  for obj in objects)

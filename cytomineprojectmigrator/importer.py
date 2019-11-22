@@ -36,7 +36,8 @@ from cytomine import Cytomine
 from cytomine.models import OntologyCollection, TermCollection, User, RelationTerm, ProjectCollection, \
     StorageCollection, AbstractImageCollection, ImageInstance, ImageInstanceCollection, AbstractImage, UserCollection, \
     Ontology, Project, Term, AnnotationCollection, Annotation, Property, Model, AttachedFile, Description, \
-    ImageGroupCollection, ImageGroup, ImageSequenceCollection, ImageSequence
+    ImageGroupCollection, ImageGroup, ImageSequenceCollection, ImageSequence, DisciplineCollection
+from cytomine.models.image import SliceInstanceCollection, SliceInstance
 from joblib import Parallel, delayed
 
 __author__ = "Rubens Ulysse <urubens@uliege.be>"
@@ -232,7 +233,7 @@ class Importer:
 
         # --------------------------------------------------------------------------------------------------------------
         logging.info("3/ Import images")
-        storages = StorageCollection().fetch()
+        storages = StorageCollection(all=True).fetch()
         abstract_images = AbstractImageCollection().fetch()
 
         groups_json = [f for f in os.listdir(self.working_path) if f.endswith(".json")
@@ -306,10 +307,17 @@ class Importer:
         else:
             images_json = [f for f in os.listdir(self.working_path) if f.endswith(".json")
                            and f.startswith("imageinstance-collection")]
+            slices_json = [f for f in os.listdir(self.working_path) if f.endswith(".json")
+                           and f.startswith("sliceinstance-collection")]
             remote_images = ImageInstanceCollection()
+            remote_slices = SliceInstanceCollection()
             if len(images_json) > 0:
                 for i in json.load(open(os.path.join(self.working_path, images_json[0]))):
                     remote_images.append(ImageInstance().populate(i))
+
+                for i in json.load(open(os.path.join(self.working_path, slices_json[0]))):
+                    remote_slices.append(SliceInstance().populate(i))
+
 
             remote_images_dict = {}
 
@@ -336,7 +344,7 @@ class Importer:
                                              if ai.originalFilename == remote_image.originalFilename
                                              and ai.width == remote_image.width
                                              and ai.height == remote_image.height
-                                             and ai.resolution == remote_image.resolution])
+                                             and ai.physicalSizeX == remote_image.physicalSizeX])
                 if abstract_image:
                     logging.info("== Found corresponding abstract image. Linking to project.")
                     ImageInstance(abstract_image.id, self.id_mapping[remote_project.id]).save()
@@ -380,11 +388,18 @@ class Importer:
                 if self.with_original_date:
                     new_abstract.created = remote_image.created
                     new_abstract.updated = remote_image.updated
-                if new_abstract.resolution is None:
-                    new_abstract.resolution = remote_image.resolution
+                if new_abstract.physicalSizeX is None:
+                    new_abstract.physicalSizeX = remote_image.physicalSizeX
                 if new_abstract.magnification is None:
                     new_abstract.magnification = remote_image.magnification
                 new_abstract.update()
+
+                slices = SliceInstanceCollection().fetch_with_filter("imageinstance", new_image.id)
+                for remote_slice in [s for s in remote_slices if s.image == remote_image.id]:
+                    new_slice = find_first([s for s in slices if s.channel == remote_slice.channel
+                                            and s.zStack == remote_slice.zStack and s.time == remote_slice.time])
+                    if new_slice:
+                        self.id_mapping[remote_slice.id] = new_slice.id
 
             print("All image-instances have been fixed.")
 
@@ -404,6 +419,7 @@ class Importer:
             annotation = copy.copy(remote_annotation)
             annotation.project = id_mapping[remote_annotation.project]
             annotation.image = id_mapping[remote_annotation.image]
+            annotation.slice = id_mapping[remote_annotation.slice]
             annotation.user = id_mapping[remote_annotation.user]
             annotation.term = [id_mapping[t] for t in remote_annotation.term]
             if not with_original_date:
@@ -436,9 +452,21 @@ class Importer:
                 prop.domainIdent = self.id_mapping[prop.domainIdent]
                 prop.save()
 
+        new_descriptions = []
+        descriptions_json = [f for f in os.listdir(self.working_path) if f.endswith(".json") and f.startswith("description")]
+        for description_json in descriptions_json:
+            desc = Description(obj).populate(json.load(open(os.path.join(self.working_path, description_json))))
+            desc_id = desc.id
+            desc.domainIdent = self.id_mapping[desc.domainIdent]
+            desc._object.class_ = desc.domainClassName
+            desc._object.id = desc.domainIdent
+            new_desc = desc.save()
+            self.id_mapping[desc_id] = new_desc.id
+            new_descriptions.append(new_desc)
+
         attached_file_id_mapping = {}
         attached_files_json = [f for f in os.listdir(self.working_path) if
-                       f.endswith(".json") and f.startswith("attached-files")]
+                               f.endswith(".json") and f.startswith("attached-files")]
         for attached_file_json in attached_files_json:
             for remote_af in json.load(open(os.path.join(self.working_path, attached_file_json))):
                 af = AttachedFile(obj).populate(remote_af)
@@ -447,17 +475,16 @@ class Importer:
                 af_id = af.id
                 af.id = None
                 new_af = af.save()
-                attached_file_id_mapping[af_id] = new_af.id
+                if new_af:
+                    attached_file_id_mapping[af_id] = new_af.id
+                else:
+                    print("ERROR: attached file {}".format(remote_af))
 
-        descriptions_json = [f for f in os.listdir(self.working_path) if f.endswith(".json") and f.startswith("description")]
-        for description_json in descriptions_json:
-            desc = Description(obj).populate(json.load(open(os.path.join(self.working_path, description_json))))
-            for (id, new_id) in attached_file_id_mapping.items():
-                desc.data = desc.data.replace("attachedfile/{}".format(id), "attachedfile/{}".format(new_id))
-            desc.domainIdent = self.id_mapping[desc.domainIdent]
-            desc._object.class_ = desc.domainClassName
-            desc._object.id = desc.domainIdent
-            desc.save()
+        for description in new_descriptions:
+            if "attachedfile/" in description.data:
+                for (id, new_id) in attached_file_id_mapping.items():
+                    description.data = description.data.replace("attachedfile/{}".format(id), "attachedfile/{}".format(new_id))
+                description.update()
 
 
 if __name__ == '__main__':
