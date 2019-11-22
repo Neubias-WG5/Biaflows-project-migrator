@@ -202,6 +202,8 @@ class Importer:
         Import the project (i.e. the Cytomine Project domain) stored in pickled file in working_path.
         If a project with the same name already exists, append a (x) suffix where x is an increasing number.
         """
+        disciplines = DisciplineCollection().fetch()
+
         projects = ProjectCollection().fetch()
         project_json = [f for f in os.listdir(self.working_path) if f.endswith(".json") and f.startswith("project")][0]
         remote_project = Project().populate(json.load(open(os.path.join(self.working_path, project_json))))
@@ -218,7 +220,7 @@ class Importer:
 
         project = copy.copy(remote_project)
         project.name = available_name()
-        project.discipline = None
+        project.discipline = find_first([d.id for d in disciplines if d.name == project.disciplineName])
         project.ontology = self.id_mapping[project.ontology]
         project_contributors = [u for u in remote_users if "project_contributor" in u.roles]
         project.users = [self.id_mapping[u.id] for u in project_contributors]
